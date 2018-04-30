@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import time
+import math
 from collections import defaultdict
 
 import xml.etree.ElementTree as ET
@@ -127,7 +128,7 @@ def one_week_back(timesheet):
         day = today - relativedelta(days=back)
         minutes = minutes_worked(timesheet, day)
         week[day.isoformat()] = minutes
-        log.info("Work on %s: %d:%02d", day.isoformat(), minutes / 60, minutes % 60)
+        log.debug("Work on %s: %d:%02d (%d minutes)", day.isoformat(), minutes / 60, minutes % 60, minutes)
     return week
 
 
@@ -189,33 +190,42 @@ if __name__ == '__main__':
     for dp in results:
         dps[dp["daystamp"]].append(dp)
 
-    for key in week.keys():
-        daystamp = key.replace("-", "")
-        minutes = week[key]
+    for current_day in week.keys():
+        daystamp = current_day.replace("-", "")
+        minutes = week[current_day]
+        hours = minutes / 60.0
+
         if minutes == 0:
+            log.info("Timesheet %s: 0 hours, skipping", current_day)
             continue
+
+        log.info("Timesheet %s: %.2f hours", current_day, hours)
+
         todays_dps = dps[daystamp]
         if len(todays_dps) == 0:
-            logging.info("no data point so far today (%s)", daystamp)
-            logging.info("adding data point '%d' to beeminder goal '%s'", minutes, bm_goal_name)
+            log.info("Beeminder %s: No datapoint, adding '%.2f' to beeminder goal '%s'",
+                     current_day, hours, bm_goal_name)
             requests.post(DATAPOINTS_URL.format(**locals()), data={
                 "daystamp": daystamp,
-                "value": minutes / 60,
+                "value": hours,
                 "comment": "via timesheet-beeminder-sync on {}".format(date.today().isoformat())})
         else:
             bm_total_value_today = 0.0
             for dp in todays_dps:
-                bm_total_value_today += float(dp["value"]) * 60
-            logging.info("beeminder goal '%s' has a total value of %02f for %s", bm_goal_name,
-                         bm_total_value_today, daystamp)
-            if int(minutes) > int(bm_total_value_today):
-                missing_minutes = minutes - bm_total_value_today
-                logging.info("adding data point '%d' to beeminder goal '%s'", missing_minutes, bm_goal_name)
+                bm_total_value_today += float(dp["value"])
+            log.info("Beeminder %s: %.2f hours", current_day, bm_total_value_today)
+            if math.isclose(hours, bm_total_value_today, abs_tol=0.1):
+                logging.info("Values Timesheet and Beeminder MATCH, not doing anything.")
+            elif bm_total_value_today > hours:
+                log.error("Total values on Beeminder values (%.2f) are larger than timesheet (%.2f)!",
+                          bm_total_value_today, minutes)
+            else:
+                missing_hours = hours - bm_total_value_today
+                log.info("Beeminder %s: Adding missing '%.2f' hours data point to beeminder goal '%s'",
+                         current_day, missing_hours, bm_goal_name)
                 requests.post(DATAPOINTS_URL.format(**locals()), data={
                     "daystamp": daystamp,
-                    "value": missing_minutes / 60,
+                    "value": missing_hours,
                     "comment": "via timesheet-beeminder-sync on {}".format(date.today().isoformat())})
-            else:
-                logging.info("values in timesheet backup and beeminder match, not doing anything")
 
     log.info("All done")
