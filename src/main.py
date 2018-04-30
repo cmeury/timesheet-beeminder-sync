@@ -54,11 +54,12 @@ def download(dbx, folder, name):
         try:
             md, res = dbx.files_download(path)
         except dropbox.exceptions.HttpError as err:
-            print('*** HTTP error', err)
+            log.exception('*** HTTP error', err)
             return None
     text = res.text
     log.debug("Downloaded file '%s' of length: %d characters, md: %s", path, len(text), md)
     return text
+
 
 def get_latest_file(dbx, dbx_folder):
     list_folder_result = dbx.files_list_folder(dbx_folder)
@@ -82,6 +83,7 @@ def convert_timedelta(duration):
     seconds = (seconds % 60)
     return hours, minutes, seconds
 
+
 def minutes_worked(root, target):
 
     tasks_element = root.find('tasks')
@@ -100,7 +102,6 @@ def minutes_worked(root, target):
 
         if target == start.date():
             log.debug("Found task from today")
-            delta = relativedelta(end, start)
             task_minutes = (end - start) / timedelta(minutes=1)
             total_minutes += task_minutes
             log.debug("Task ID: %s, Duration: %d minutes", taskId, task_minutes)
@@ -163,21 +164,58 @@ if __name__ == '__main__':
                  "access token from the app console on the web.")
 
     try:
-        #latest_file = get_latest_file(dbx, dbx_folder)
-        pass
+        latest_file = get_latest_file(dbx, dbx_folder)
+        #pass
     except ValidationError as err:
         log.exception("Could not list files in specified folder '%s': %s", dbx_folder, err)
         sys.exit(1)
 
-    tree = ET.parse('src/test/test.xml')
-    timesheet = tree.getroot()
-    #xml = download(dbx, dbx_folder, latest_file)
-    #timesheet = ET.fromstring(xml)
+    # tree = ET.parse('src/test/test.xml')
+    # timesheet = tree.getroot()
+    xml = download(dbx, dbx_folder, latest_file)
+    if not xml:
+       log.error("Could not download file: %s", latest_file)
+       sys.exit(1)
+    timesheet = ET.fromstring(xml)
     if timesheet.tag != "timesheet":
         log.error("Root tag of XML was not 'timesheet': %s", timesheet.tag)
         sys.exit(1)
 
     week = one_week_back(timesheet)
-    print(week)
+
+    # Get all datapoints into a dict keyed by daystamp
+    results = requests.get(DATAPOINTS_URL.format(**locals())).json()
+    dps = defaultdict(list)
+    for dp in results:
+        dps[dp["daystamp"]].append(dp)
+
+    for key in week.keys():
+        daystamp = key.replace("-", "")
+        minutes = week[key]
+        if minutes == 0:
+            continue
+        todays_dps = dps[daystamp]
+        if len(todays_dps) == 0:
+            logging.info("no data point so far today (%s)", daystamp)
+            logging.info("adding data point '%d' to beeminder goal '%s'", minutes, bm_goal_name)
+            requests.post(DATAPOINTS_URL.format(**locals()), data={
+                "daystamp": daystamp,
+                "value": minutes / 60,
+                "comment": "via timesheet-beeminder-sync on {}".format(date.today().isoformat())})
+        else:
+            bm_total_value_today = 0.0
+            for dp in todays_dps:
+                bm_total_value_today += float(dp["value"]) * 60
+            logging.info("beeminder goal '%s' has a total value of %02f for %s", bm_goal_name,
+                         bm_total_value_today, daystamp)
+            if int(minutes) > int(bm_total_value_today):
+                missing_minutes = minutes - bm_total_value_today
+                logging.info("adding data point '%d' to beeminder goal '%s'", missing_minutes, bm_goal_name)
+                requests.post(DATAPOINTS_URL.format(**locals()), data={
+                    "daystamp": daystamp,
+                    "value": missing_minutes / 60,
+                    "comment": "via timesheet-beeminder-sync on {}".format(date.today().isoformat())})
+            else:
+                logging.info("values in timesheet backup and beeminder match, not doing anything")
 
     log.info("All done")
