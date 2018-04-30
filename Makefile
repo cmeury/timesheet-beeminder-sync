@@ -1,17 +1,18 @@
-.PHONY: deps
+APP_NAME=timesheet-beeminder-sync
 
-all: deps
-	PYTHONPATH=.venv ; . .venv/bin/activate
+build:
+	docker build -t $(APP_NAME) .
 
-.venv:
-	if [ ! -e ".venv/bin/activate_this.py" ] ; then virtualenv --clear .venv ; fi
+build-nc: # without caching
+	docker build --no-cache -t $(APP_NAME) .
 
-deps: .venv requirements.txt
-	PYTHONPATH=.venv ; . .venv/bin/activate && .venv/bin/pip install -U -r requirements.txt
+run:
+	docker run -i -t --rm --env-file=./.env --name="$(APP_NAME)" $(APP_NAME)
+run-dev:
+	docker run -i -t --rm --env-file=./.env --volume=${PWD}:/usr/src/app:ro --name="$(APP_NAME)" $(APP_NAME)
 
-test: .venv setup.py
-	PYTHONPATH=.venv ; . .venv/bin/python setup.py test
+up: build run
+dev: build run-dev
 
-clean:
-	rm -rf .venv build *.egg-info
-	rm -f `find . -name \*.pyc -print0 | xargs -0`
+stop:
+	docker stop $(APP_NAME); docker rm $(APP_NAME)
