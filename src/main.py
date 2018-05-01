@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 
 from dateutil.parser import parse
 from dateutil.relativedelta import *
-from datetime import timedelta, date
+from datetime import timedelta, date, datetime
 
 import requests
 
@@ -202,13 +202,15 @@ if __name__ == '__main__':
         log.info("Timesheet %s: %.2f hours", current_day, hours)
 
         todays_dps = dps[daystamp]
+        comment = "timesheet-beeminder-sync on {} | backup-file: {}".format(datetime.today().isoformat(), latest_file)
         if len(todays_dps) == 0:
             log.info("Beeminder %s: No datapoint, adding '%.2f' to beeminder goal '%s'",
                      current_day, hours, bm_goal_name)
             requests.post(DATAPOINTS_URL.format(**locals()), data={
                 "daystamp": daystamp,
                 "value": hours,
-                "comment": "via timesheet-beeminder-sync on {}".format(date.today().isoformat())})
+                "comment": comment,
+            })
         else:
             bm_total_value_today = 0.0
             for dp in todays_dps:
@@ -216,9 +218,11 @@ if __name__ == '__main__':
             log.info("Beeminder %s: %.2f hours", current_day, bm_total_value_today)
             if math.isclose(hours, bm_total_value_today, abs_tol=0.1):
                 logging.info("Values Timesheet and Beeminder MATCH, not doing anything.")
+                sys.exit(0)
             elif bm_total_value_today > hours:
                 log.error("Total values on Beeminder values (%.2f) are larger than timesheet (%.2f)!",
                           bm_total_value_today, minutes)
+                sys.exit(1)
             else:
                 missing_hours = hours - bm_total_value_today
                 log.info("Beeminder %s: Adding missing '%.2f' hours data point to beeminder goal '%s'",
@@ -226,6 +230,7 @@ if __name__ == '__main__':
                 requests.post(DATAPOINTS_URL.format(**locals()), data={
                     "daystamp": daystamp,
                     "value": missing_hours,
-                    "comment": "via timesheet-beeminder-sync on {}".format(date.today().isoformat())})
+                    "comment": comment,
+                })
 
     log.info("All done")
